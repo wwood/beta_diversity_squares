@@ -1,0 +1,258 @@
+#!/usr/bin/env ruby
+
+require 'optparse'
+require 'bio-logger'
+require 'csv'
+require 'bio-express_beta_diversity'
+require 'bio-commandeer'
+require 'tmpdir'
+require 'files'
+
+$LOAD_PATH.unshift(File.join(File.dirname(__FILE__), '..', 'lib'))
+require 'beta_diversity_squares'
+
+SCRIPT_NAME = File.basename(__FILE__); LOG_NAME = 'beta_diversity_squares'
+
+# Parse command line options into the options hash
+options = {
+  :logger => 'stderr',
+  :log_level => 'info',
+}
+o = OptionParser.new do |opts|
+  opts.banner = "
+    Usage: #{SCRIPT_NAME} <arguments>
+
+    Takes an OTU table, and generates a visualisation of the beta diversity between each pair of samples.\n\n"
+
+  opts.separator "\nInput:\n\n"
+  opts.on("--diss-file FILE", "Use as input the specified express beta diversity distance matrix, as output from express beta diversity") do |arg|
+    options[:diss_file] = arg
+  end
+  opts.on("--unifrac FILE", "Use as input the specified unifrac format OTU table") do |arg|
+    options[:unifrac_file] = arg
+  end
+  opts.on("--ebd FILE", "Use as input the specified express beta diversity format OTU table") do |arg|
+    options[:ebd_file] = arg
+  end
+  opts.on("--app FILE", "Use as input the specified Ace Pyrotag Pipeline OTU table, specifically the results/non_normalised_otu_table_expanded.tsv file") do |arg|
+    options[:app_file] = arg
+  end
+
+  opts.separator "\nOutput:\n\n"
+  opts.on("--output FILE", "Write the beta diversity square SVG output to this file") do |arg|
+    options[:output_file] = arg
+  end
+  opts.on("--output-directory FILE", "Write the beta diversity squares SVG files (one for each kind of beta diversity measure) as SVG files in this directory") do |arg|
+    options[:output_file_directory] = arg
+  end
+
+  opts.separator "\nModifications:\n\n"
+  opts.on("--tree FILE", "Newick tree file containing sequence identifiers of OTU mappings [required]") do |arg|
+    options[:tree_file] = arg
+  end
+  opts.on("--order-and-rename FILE", "File containinng newline separated sample names in order of the output. If a second column is specified, the samples are written on the visualisation as this [default: use order from input, and use names from input]") do |arg|
+    options[:order_and_rename_file] = arg
+  end
+
+  # logger options
+  opts.separator "\nVerbosity:\n\n"
+  opts.on("-q", "--quiet", "Run quietly, set logging to ERROR level [default INFO]") {options[:log_level] = 'error'}
+  opts.on("--logger filename",String,"Log to file [default #{options[:logger]}]") { |name| options[:logger] = name}
+  opts.on("--trace options",String,"Set log level [default INFO]. e.g. '--trace debug' to set logging level to DEBUG"){|s| options[:log_level] = s}
+end; o.parse!
+if ARGV.length != 0
+  $stderr.puts o
+  exit 1
+end
+# Setup logging
+Bio::Log::CLI.logger(options[:logger]); Bio::Log::CLI.trace(options[:log_level]); log = Bio::Log::LoggerPlus.new(LOG_NAME); Bio::Log::CLI.configure(LOG_NAME); log.outputters[0].formatter = Log4r::PatternFormatter.new(:pattern => "%5l %c %d: %m", :date_pattern => '%d/%m %T')
+
+
+
+# Validation of options
+# Require exactly 1 input file
+input = nil
+[:diss_file, :unifrac_file, :ebd_file, :app_file].each do |sym|
+  if input and options[sym]
+    log.error "Multiple input types were specified - only one can be specified"
+    exit 1
+  elsif options[sym]
+    input = options[sym]
+  end
+end
+if input.nil?
+  log.error "No input specified, cannot continue"
+  exit 1
+end
+# Require an output file or directory depending on what the input file was
+if options[:diss_file] and options[:output_file].nil?
+  log.error "If a diss file is specified, then an output file (--output) must also be specified"
+  exit 1
+end
+if (options[:unifrac_file] or options[:ebd_file] or options[:app_file]) and options[:output_file_directory].nil?
+  log.error "If an OTU table is specified, an output directory (--output-directory) must also be specified"
+  exit 1
+end
+# Unless a diss file is given, a tree file must be given
+if options[:diss_file].nil? and options[:tree_file].nil?
+  log.error "No --tree file was specified (and no diss file was given) - cannot run ebd without one"
+  exit 1
+end
+
+
+
+
+
+# Parse in the order/rename file if specified
+order_and_names = nil #Hashes are ordered in Ruby
+if options[:order_and_rename_file]
+  order_and_names = {}
+  CSV.foreach(options[:order_and_rename_file], :col_sep => "\t") do |row|
+    if ![1,2].include?(row.length)
+      log.error "Problem parsing in order and rename file, at this line, expected either 1 or 2 fields, found #{row.length}: #{row.join("\t")}"
+      exit 1
+    end
+    key = row[0]
+    name = row[1]
+    if order_and_names.key?(key)
+      log.error "The sample called `#{key}' was specified more than once in the input file, not continuing to be on the coservative side"
+      exit 1
+    end
+    if name.nil?
+      order_and_names[key] = key
+    else
+      # not the fastet way to check, but good enough since there's unlikely to be many samples
+      if order_and_names.values.include?(name)
+        log.warn "Beware, there are more than sample called `#{name}' in the --order-and-rename file"
+      end
+      order_and_names[key] = name
+    end
+  end
+end
+
+
+
+
+
+# Convert input files into distance files, if they are not already in such a state
+# end up with a list of diss files
+input_ebd_table_file = options[:ebd_file]
+input_otu_table_tempfile = nil
+unless options[:diss_file] or options[:ebd_file]
+  which_convert = Bio::Commandeer "which convertToEBD.py" #In the current version of ebd, there is no shebang, so we have to run 'python `which convertToEBD.py` ...'
+  convert_cmd = "python #{which_convert}"
+
+  input_otu_table_tempfile = Tempfile.new('ebd_from_unifrac')
+  input_ebd_table_file = input_otu_table_tempfile.path
+
+  convert_unifrac_to_ebd = lambda do |unifrac_path|
+    input_otu_table_tempfile = Tempfile.new('ebd_from_unifrac')
+    input_ebd_table_file = input_otu_table_tempfile.path
+    log.info "Converting OTU table from Unifrac format to EBD format"
+
+    Bio::Commandeer.run "#{convert_cmd} #{unifrac_path} #{input_ebd_table_file}"
+  end
+
+  if options[:unifrac_file]
+    # Unifrac format files are taken as a direct input to convertToEBD.py
+    convert_unifrac_to_ebd.call options[:unifrac_file]
+
+
+  elsif options[:app_file]
+    # WARN: This part of the code is a bit hacky, because I'm lazy and APP's days are numbered (I hope)
+    log.info "Converting OTU table from APP format to Unifrac format"
+
+
+    # how many samples are in the file?
+    #  $ head -n3 results/non_normalised_otu_table_expanded.tsv |tail -n1 |sed 's/\t/\n/g' |grep -n '\% Identity' |tail -n1
+    #  45:% Identity
+    # => 44 samples
+    cmd1 = "head -n3 #{options[:app_file]} |tail -n1 |sed 's/\t/\n/g' |grep -n '\% Identity' |tail -n1"
+    identity_line = Bio::Commandeer.run cmd1
+    matches = identity_line.match(/^(\d+):% Identity\n$/)
+    if matches.nil? or matches[1].to_i < 3
+      log.error "Error working with the input APP file. The command that failed to produce useful results was: #{cmd1}, which should produce something like '45:% Identity'"
+      log.error "One problem might be that only 1 sample is present in the APP file?"
+      exit 1
+    end
+    num_samples = matches[1].to_i-1
+    otu_identifier_column = num_samples+11
+
+
+    Tempfile.open('input_to_bc_convert') do |input_to_bc|
+      input_to_bc.close
+      # cut -f1-44,54 ../../../app_analysis_20131211/results/non_normalised_otu_table_expanded.tsv |tail -n+2 |sed 's/Hit ID/Consensus Lineage/' |grep -v '\-$' >otu.csv
+
+      cmd2 = "cut -f1-#{num_samples},#{otu_identifier_column} #{options[:app_file].inspect} |tail -n+2 |sed 's/Hit ID/Consensus Lineage/' |grep -v '\-$' >#{input_to_bc.path}"
+      Bio::Commandeer.run cmd2
+
+      Tempfile.new('unifrac_from_app','unifrac') do |unifile|
+        # Convert the APP table into Unifrac format
+        Bio::Commandeer.run "bc_convert_files -if #{input_to_bc.path} -of unifrac -op #{unifile.basename}"
+
+        # Convert the unifrac format into ebd
+        convert_unifrac_to_ebd.call unifile.path
+      end
+    end
+  end
+end
+
+
+
+# Run EBD in a temporary directory (unless we already have the distance file)
+distance_files = []
+if options[:diss_file]
+  distance_files.push options[:diss_file]
+else
+  ebd_output_directory = Files.create.root #A temporary directory that gets removed at the end of the program
+  Dir.chdir(ebd_output_directory) do
+    # ebd -t /srv/db/gg/qiime_gg_2012/gg_12_10_otus/trees/99_otus.tree -s bc_convert_files.unifrac.ebd -a
+    Bio::Commandeer.run "ebd -t #{options[:tree_file]} -s #{input_ebd_table_file} -a"
+    Dir.glob('*.diss') do |distance_file|
+      distance_files << File.join(ebd_output_directory, distance_file)
+    end
+  end
+end
+log.info "Processing #{distance_files.length} EBD distance (diss) files"
+
+
+
+# Generate output filenames for each of the specified distance matrices
+distance_file_paths_to_svg_files = {}
+if options[:output_file_directory] and distance_files.length > 1
+  raise "Programming / input error - require > 1 output file, but output file directory is not set"
+end
+if options[:output_file]
+  if distance_files.length == 1
+    distance_file_paths_to_svg_files[distance_files[0]] = options[:output_file]
+  else
+    raise "Error! 1 output file specified, but there is #{distance_files.length} distance files to process"
+  end
+else
+  distance_files.each do |distance_file|
+    log.debug "Creating output filename for #{distance_file}"
+    output = File.join options[:output_file_directory], File.basename(distance_file).gsub(/.diss$/, '.svg')
+    log.debug "Output file was dubbed #{output}"
+    distance_file_paths_to_svg_files[distance_file] = output
+  end
+end
+
+
+# For each distance file / output file, write the SVG
+distance_file_paths_to_svg_files.each do |distance_file, output_path|
+  log.info "Converting diss format file #{distance_file} to beta diversity squares SVG #{output_path}"
+  svg = Bio::BetaDiversitySquares.new.diss_to_svg(distance_file, :order_and_rename => order_and_names)
+  File.open(output_path,'w') do |out|
+    out.puts svg
+  end
+end
+log.info "Converted #{distance_file_paths_to_svg_files.length} distance files to beta diversity squares"
+
+
+
+# Close temporary EBD input file (if it is a tempfile)
+unless input_otu_table_tempfile.nil?
+  input_otu_table_tempfile.close
+end
+
+

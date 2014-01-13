@@ -17,8 +17,8 @@ Jeweler::Tasks.new do |gem|
   gem.name = "beta_diversity_squares"
   gem.homepage = "http://github.com/wwood/beta_diversity_squares"
   gem.license = "MIT"
-  gem.summary = %Q{TODO: one-line summary of your gem}
-  gem.description = %Q{TODO: longer description of your gem}
+  gem.summary = %Q{Directly visualise beta diversities}
+  gem.description = %Q{Microbial evology: Directly visualise beta diversities}
   gem.email = "donttrustben@gmail.com"
   gem.authors = ["Ben Woodcroft"]
   # dependencies defined in Gemfile

@@ -76,7 +76,7 @@ module Bio
             width: size,
             height: size,
             fill: "#000000",
-            'shape-rendering' => "crispEdges",
+            'shape-rendering' => "crispEdges", #i.e. don't anti-alias
           )
         end
       end

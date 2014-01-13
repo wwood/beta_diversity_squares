@@ -1,6 +1,7 @@
 require 'bio-express_beta_diversity'
 require 'bio-logger'
 require 'svg_writer'
+require 'descriptive_statistics'
 
 module Bio
   class BetaDiversitySquares
@@ -21,12 +22,23 @@ module Bio
       log.info "Parsed in #{diss.sample_names.length} samples"
 
       # Constants
-      box_size = 20
-      boxes_start_x_offset = 320
-      boxes_start_y_offset = 120
+      box_size = 20.0
+      boxes_start_x_offset = 200
+      boxes_start_y_offset = 200
       white_break_size = box_size
-      min=0.2 #TODO: find min & max empirically using mean+sd
-      max=0.6
+
+      # Get some idea of the distribution, so we can automatically set min and max
+      all_distances = []
+      diss.sample_names.each_with_index do |s1,i|
+        diss.sample_names.each_with_index do |s2, j|
+          next unless i<j
+          all_distances.push 1.0-diss.distance(s1,s2)
+        end
+      end
+      min=all_distances.percentile(10)
+      max=all_distances.percentile(90)
+      log.info "Found #{all_distances.length} beta diversities, with 10th percentile #{min} and 90th percentile #{max}"
+
 
 
       order = diss.sample_names
@@ -37,7 +49,7 @@ module Bio
 
       width = boxes_start_x_offset + box_size*order.length + white_break_size
       height = boxes_start_y_offset + box_size*order.length + white_break_size
-      svgee = SVGWriter.new(width,height)#Bio::Graphics::SVGEE.new({})
+      svgee = SVGWriter.new(width,height)
 
       # Write sample names along the LHS
       # e.g. <text y="130" x="25">Active Young AB12 5221</text>
@@ -50,7 +62,14 @@ module Bio
             log.warn "No replacement name found for #{sample_ident}, so using #{sample_ident} instead"
           end
         end
-        svgee.text(name, {:x => 25, :y => boxes_start_y_offset+box_size*i})
+        # Draw text of the horizontal label
+        svgee.text(name, {:x => 25, :y => boxes_start_y_offset+box_size*i+box_size/4})
+        # Draw text of the vertical label
+        svgee.text(name, {
+          :y => boxes_start_x_offset+box_size*i+box_size/4,
+          :x => 25-boxes_start_y_offset,
+          :transform => "matrix(0,-1,1,0,0,0)",
+        })
       end
 
 
@@ -62,17 +81,17 @@ module Bio
           # Don't draw a beta diversity of a sample against itself
           next if i==j
 
-          size = 1-diss.distance(sample_ident1, sample_ident2)
+          size = 1.0-diss.distance(sample_ident1, sample_ident2)
           if size < min
-            size = 0
+            size = 0.0
           else
             # Rescale squares to accentuate dynamic range
             size = (size-min)/(max-min)*box_size
           end
 
           svgee.rectangle(
-            x: boxes_start_x_offset+i*box_size,
-            y: boxes_start_y_offset+j*box_size,
+            x: boxes_start_x_offset+i*box_size-size/2,
+            y: boxes_start_y_offset+j*box_size-size/2,
             width: size,
             height: size,
             fill: "#000000",

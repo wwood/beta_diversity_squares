@@ -5,7 +5,6 @@ require 'bio-logger'
 require 'csv'
 require 'bio-express_beta_diversity'
 require 'bio-commandeer'
-require 'tmpdir'
 require 'files'
 
 $LOAD_PATH.unshift(File.join(File.dirname(__FILE__), '..', 'lib'))
@@ -105,10 +104,12 @@ end
 
 
 # Parse in the order/rename file if specified
-order_and_names = nil #Hashes are ordered in Ruby
+order_and_names = nil #A hash if sample IDs to full names. Hashes are ordered in Ruby
 if options[:order_and_rename_file]
   order_and_names = {}
   CSV.foreach(options[:order_and_rename_file], :col_sep => "\t") do |row|
+    next if row.empty? #Ignore blank lines e.g. at the end of the file
+
     if ![1,2].include?(row.length)
       log.error "Problem parsing in order and rename file, at this line, expected either 1 or 2 fields, found #{row.length}: #{row.join("\t")}"
       exit 1
@@ -129,6 +130,10 @@ if options[:order_and_rename_file]
       order_and_names[key] = name
     end
   end
+end
+if !order_and_names.nil? and order_and_names.empty?
+  log.error "Problem parsing order and rename file - no entries were found in this file, which suggests you want to generate an image with no data in it. I'm confused"
+  exit 1
 end
 
 

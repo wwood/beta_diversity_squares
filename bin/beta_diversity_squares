@@ -52,6 +52,9 @@ o = OptionParser.new do |opts|
   opts.on("--order-and-rename FILE", "File containinng newline separated sample names in order of the output. If a second column is specified, the samples are written on the visualisation as this [default: use order from input, and use names from input]") do |arg|
     options[:order_and_rename_file] = arg
   end
+  opts.on("--row-colours FILE", "Tab-separated file containinng sample names and row colours. [default: all black]") do |arg|
+    options[:row_colurs_file] = arg
+  end
 
   # logger options
   opts.separator "\nVerbosity:\n\n"
@@ -137,6 +140,17 @@ if !order_and_names.nil? and order_and_names.empty?
 end
 
 
+row_colours = nil
+if options[:row_colurs_file]
+  row_colours = {}
+  CSV.foreach(options[:row_colurs_file], :col_sep => "\t") do |row|
+    if row.length != 2
+      raise "Found the incorrect number of fields in row colours file: #{row}"
+    end
+    row_colours[row[0]] = row[1]
+  end
+  log.info "Read in colours for #{row_colours.length} samples"
+end
 
 
 
@@ -247,7 +261,7 @@ end
 # For each distance file / output file, write the SVG
 distance_file_paths_to_svg_files.each do |distance_file, output_path|
   log.info "Converting diss format file #{distance_file} to beta diversity squares SVG #{output_path}"
-  svg = Bio::BetaDiversitySquares.new.diss_to_svg(distance_file, :order_and_rename => order_and_names)
+  svg = Bio::BetaDiversitySquares.new.diss_to_svg(distance_file, :order_and_rename => order_and_names, :row_colours => row_colours)
   File.open(output_path,'w') do |out|
     out.puts svg
   end

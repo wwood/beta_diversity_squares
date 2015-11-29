@@ -47,6 +47,9 @@ module Bio
       end
       log.debug "Found order of samples: #{order.inspect}" if log.debug?
 
+      row_colours = options[:row_colours]
+      row_colours ||= {}
+
       width = boxes_start_x_offset + box_size*order.length + white_break_size
       height = boxes_start_y_offset + box_size*order.length + white_break_size
       svgee = SVGWriter.new(width,height)
@@ -86,15 +89,15 @@ module Bio
             size = 0.0
           else
             # Rescale squares to accentuate dynamic range
-            size = (size-min)/(max-min)*box_size
+            size = (size-min)/ (max-min)*box_size
           end
 
           svgee.rectangle(
-            x: boxes_start_x_offset+i*box_size-size/2,
-            y: boxes_start_y_offset+j*box_size-size/2,
+            x: boxes_start_x_offset+i*box_size-size/ 2,
+            y: boxes_start_y_offset+j*box_size-size/ 2,
             width: size,
             height: size,
-            fill: "#000000",
+            fill: row_colours.key?(sample_ident2) ? row_colours[sample_ident2] : "#000000",
             'shape-rendering' => "crispEdges", #i.e. don't anti-alias
           )
         end

@@ -4,6 +4,7 @@ gem 'bio-express_beta_diversity', '~>0.0'
 gem 'bio-commandeer', '~>0.0'
 gem 'bio-logger', '~>1.0'
 gem 'descriptive_statistics', '~>1.1'
+gem 'files', '~>0.3'
 
 # Add dependencies to develop your gem here.
 # Include everything needed to run rake, tests, features, etc.
